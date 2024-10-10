@@ -1,0 +1,16 @@
+# Variables
+CC = gcc
+CFLAGS = -Wall -Werror -pthread -O
+TARGET = pzip
+SRC = pzip.c
+
+# Default target
+all: $(TARGET)
+
+# Compile the source file into the executable
+$(TARGET): $(SRC)
+	$(CC) $(CFLAGS) -o $(TARGET) $(SRC)
+
+# Clean up any build artifacts
+clean:
+	rm -f $(TARGET)
