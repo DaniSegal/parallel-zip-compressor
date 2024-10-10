@@ -80,8 +80,6 @@ void compress_rle(char *input, size_t input_size, char **output, size_t *output_
 }
 
 void *compress_and_write_part(void *arg) {
-    FILE *outfile = (FILE *)arg;
-
     while (1) {
         size_t part_index;
 
@@ -101,8 +99,6 @@ void *compress_and_write_part(void *arg) {
 
         char *part_data = file_data + offset;
 
-        printf("Thread is processing part %zu\n", part_index);
-
         // Compress the part
         char *compressed_data = NULL;
         size_t compressed_size = 0;
@@ -115,27 +111,19 @@ void *compress_and_write_part(void *arg) {
             pthread_cond_wait(&cond, &write_mutex);
         }
 
-        // Write compressed data to output file
-        if (fwrite(compressed_data, 1, compressed_size, outfile) != compressed_size) {
-            perror("Error writing to output file");
-            free(compressed_data);
-            pthread_mutex_unlock(&write_mutex);
-            exit(EXIT_FAILURE);
-        }
-        // Free the compressed data
+        
+        fwrite(compressed_data, 1, compressed_size, stdout);
         free(compressed_data);
-
-        // Update the next part index to write
         next_part_to_write++;
 
         // Signal other threads that they may proceed
         pthread_cond_broadcast(&cond);
         pthread_mutex_unlock(&write_mutex);
+        fprintf(stderr, "Thread processing part %zu\n", part_index);
 
     }
     return NULL;
 }
-
 
 int main(int argc, char *argv[]) {
     if (argc < 2) {
@@ -144,7 +132,7 @@ int main(int argc, char *argv[]) {
     }
 
     int num_threads = get_nprocs();
-    printf("Number of available processors: %d\n", num_threads);
+    fprintf(stderr, "Number of available processors: %d\n", num_threads);
 
     // Step 1: Open the file
     int fd = open(argv[1], O_RDONLY);
@@ -173,42 +161,30 @@ int main(int argc, char *argv[]) {
     // Step 4: Calculate the number of parts
     num_parts = (file_size + PART_SIZE - 1) / PART_SIZE;
 
-    // Step 5: Open the output file
-    FILE *outfile = fopen("pzip.z", "wb");
-    if (!outfile) {
-        perror("Error opening output file");
-        cleanup(fd, file_data, file_size);
-        return EXIT_FAILURE;
-    }
 
-    //pthread_mutex_init(&mutex, NULL);
-
-    // Step 6: Create thread pool
+    // Step 5: Create thread pool
     pthread_t threads[num_threads];
     for (long i = 0; i < num_threads; i++) {
-        if (pthread_create(&threads[i], NULL, compress_and_write_part, (void *)outfile) != 0) {
+        if (pthread_create(&threads[i], NULL, compress_and_write_part, NULL) != 0) {
             perror("Error creating thread");
             cleanup(fd, file_data, file_size);
-            fclose(outfile);
             return EXIT_FAILURE;
         }
     }
 
-    // step 7: join the threads
+    // step 6: join the threads
     for (long i = 0; i < num_threads; i++) {
         if (pthread_join(threads[i], NULL) != 0) {
             perror("Error joining thread");
             cleanup(fd, file_data, file_size);
-            fclose(outfile);
             return EXIT_FAILURE;
         }
     }
 
-    // Step 8: Cleanup
-    fclose(outfile);
+    // Step 7: Cleanup
     cleanup(fd, file_data, file_size);
 
-    printf("Compression completed successfully.\n");
+    fprintf(stderr, "Compression completed successfully.\n");
 
     return EXIT_SUCCESS;
 }
