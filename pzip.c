@@ -4,10 +4,11 @@
 #include <sys/mman.h>   // For mmap()
 #include <sys/stat.h>   // For fstat()
 #include <unistd.h>     // For close()
+#include <sys/sysinfo.h> // For get_nprocs_conf()
 
 int main(int argc, char *argv[]) {
     if (argc < 2) {
-        fprintf(stderr, "Usage: %s <filename>\n", argv[0]);
+        fprintf(stderr, "Usage: %s <filename1> <filename2> ...\n", argv[0]);
         return EXIT_FAILURE;
     }
 
@@ -50,6 +51,9 @@ int main(int argc, char *argv[]) {
 
     // Step 6: Close the file
     close(fd);
+
+    int available_procs = get_nprocs_conf();
+    printf("Number of available processors: %d\n", available_procs);
 
     return EXIT_SUCCESS;
 }
