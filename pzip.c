@@ -6,18 +6,24 @@
 #include <unistd.h>     // For close()
 #include <sys/sysinfo.h> // For get_nprocs_conf()
 #include <pthread.h>
+#include <string.h>
+#include <stdint.h>
 
 #define PART_SIZE 1024
 
-typedef struct {
-    char *data;
-} FilePart;
+// typedef struct {
+//     char *data;
+// } FilePart;
 
 size_t current_part = 0;
+size_t next_part_to_write = 0;
 size_t num_parts = 0;
 size_t file_size = 0;
 char *file_data;
-pthread_mutex_t mutex;
+
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t write_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
 
 void cleanup(int fd, char *file_data, size_t file_size) {
     if (file_data != NULL && file_data != MAP_FAILED) {
@@ -29,24 +35,103 @@ void cleanup(int fd, char *file_data, size_t file_size) {
         close(fd);
     }
     pthread_mutex_destroy(&mutex);
+    pthread_mutex_destroy(&write_mutex);
+    pthread_cond_destroy(&cond);
 }
 
-void *compress_part(void *arg) {
+void compress_rle(char *input, size_t input_size, char **output, size_t *output_size) {
+    // Allocate maximum possible output size (worst case)
+    size_t max_output_size = input_size * (sizeof(uint32_t) + sizeof(char)); // Max possible size
+    char *out = malloc(max_output_size);
+    if (!out) {
+        perror("Error allocating memory for compressed data");
+        exit(EXIT_FAILURE);
+    }
+
+    size_t out_index = 0;
+    size_t i = 0;
+
+    while (i < input_size) {
+        char current_char = input[i];
+        uint32_t count = 1;
+
+        // Count consecutive characters
+        while ((i + count < input_size) && (input[i + count] == current_char)) {
+            count++;
+        }
+
+        // Write count (4 bytes) and character (1 byte) to output
+        memcpy(out + out_index, &count, sizeof(uint32_t));
+        out_index += sizeof(uint32_t);
+        out[out_index++] = current_char;
+
+        i += count;
+    }
+
+    // Reallocate output buffer to actual size
+    out = realloc(out, out_index);
+    if (!out) {
+        perror("Error reallocating memory for compressed data");
+        exit(EXIT_FAILURE);
+    }
+
+    *output = out;
+    *output_size = out_index;
+}
+
+void *compress_and_write_part(void *arg) {
+    FILE *outfile = (FILE *)arg;
+
     while (1) {
+        size_t part_index;
+
+        // Get the next part to process safely
         pthread_mutex_lock(&mutex);
             if (current_part >= num_parts) {
                 pthread_mutex_unlock(&mutex);
                 break;
             }
-            size_t part_index = current_part;
+            part_index = current_part;
             current_part++;
         pthread_mutex_unlock(&mutex);
 
-        char *part_data = file_data + (part_index * PART_SIZE);
-        printf("Thread %ld processing part %zu\n", (long)arg, part_index);
+        // Calculate part size (handle last part)
+        size_t offset = part_index * PART_SIZE;
+        size_t part_size = ((offset + PART_SIZE) <= file_size) ? PART_SIZE : (file_size - offset);
 
-        // Perform RLE compression here (placeholder for now)
-        // Example: compress_rle(part_data, PART_SIZE);
+        char *part_data = file_data + offset;
+
+        printf("Thread is processing part %zu\n", part_index);
+
+        // Compress the part
+        char *compressed_data = NULL;
+        size_t compressed_size = 0;
+        compress_rle(part_data, part_size, &compressed_data, &compressed_size);
+
+        // Synchronize writing to the output file in order
+        pthread_mutex_lock(&write_mutex);
+        while (part_index != next_part_to_write) {
+            // Wait until it's this part's turn to write
+            pthread_cond_wait(&cond, &write_mutex);
+        }
+
+        // Write compressed data to output file
+        if (fwrite(compressed_data, 1, compressed_size, outfile) != compressed_size) {
+            perror("Error writing to output file");
+            free(compressed_data);
+            pthread_mutex_unlock(&write_mutex);
+            exit(EXIT_FAILURE);
+        }
+        // Free the compressed data
+        free(compressed_data);
+
+        // Update the next part index to write
+        next_part_to_write++;
+
+        // Signal other threads that they may proceed
+        pthread_cond_broadcast(&cond);
+        pthread_mutex_unlock(&write_mutex);
+
     }
     return NULL;
 }
@@ -59,6 +144,7 @@ int main(int argc, char *argv[]) {
     }
 
     int num_threads = get_nprocs();
+    printf("Number of available processors: %d\n", num_threads);
 
     // Step 1: Open the file
     int fd = open(argv[1], O_RDONLY);
@@ -86,31 +172,43 @@ int main(int argc, char *argv[]) {
 
     // Step 4: Calculate the number of parts
     num_parts = (file_size + PART_SIZE - 1) / PART_SIZE;
-    pthread_mutex_init(&mutex, NULL);
 
-    // Step 5: Create thread pool
+    // Step 5: Open the output file
+    FILE *outfile = fopen("pzip.z", "wb");
+    if (!outfile) {
+        perror("Error opening output file");
+        cleanup(fd, file_data, file_size);
+        return EXIT_FAILURE;
+    }
+
+    //pthread_mutex_init(&mutex, NULL);
+
+    // Step 6: Create thread pool
     pthread_t threads[num_threads];
     for (long i = 0; i < num_threads; i++) {
-        if (pthread_create(&threads[i], NULL, compress_part, (void *)i) != 0) {
+        if (pthread_create(&threads[i], NULL, compress_and_write_part, (void *)outfile) != 0) {
             perror("Error creating thread");
             cleanup(fd, file_data, file_size);
+            fclose(outfile);
             return EXIT_FAILURE;
         }
     }
 
-    // step 6: join the threads
+    // step 7: join the threads
     for (long i = 0; i < num_threads; i++) {
         if (pthread_join(threads[i], NULL) != 0) {
             perror("Error joining thread");
             cleanup(fd, file_data, file_size);
+            fclose(outfile);
             return EXIT_FAILURE;
         }
     }
 
-    // Step 7: Cleanup
+    // Step 8: Cleanup
+    fclose(outfile);
     cleanup(fd, file_data, file_size);
 
-    printf("Number of available processors: %d\n", num_threads);
+    printf("Compression completed successfully.\n");
 
     return EXIT_SUCCESS;
 }
