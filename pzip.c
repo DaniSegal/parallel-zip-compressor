@@ -6,6 +6,12 @@
 #include <unistd.h>     // For close()
 #include <sys/sysinfo.h> // For get_nprocs_conf()
 
+#define PART_SIZE 1024
+
+typedef struct {
+    char *data;
+} FilePart;
+
 int main(int argc, char *argv[]) {
     if (argc < 2) {
         fprintf(stderr, "Usage: %s <filename1> <filename2> ...\n", argv[0]);
@@ -36,20 +42,35 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
-    // Step 4: Access the data
+    // Step 4: Split the data into parts and create the task queue
+    size_t num_parts = (file_size + PART_SIZE - 1) / PART_SIZE; // Calculate the number of parts
+    char **parts = malloc(num_parts * sizeof(char *));
+    if (parts == NULL) {
+        perror("Error allocating memory for parts");
+        munmap(file_data, file_size);
+        close(fd);
+        return EXIT_FAILURE;
+    }
+
+     for (size_t i = 0; i < num_parts; i++) {
+        parts[i] = file_data + (i * PART_SIZE);
+        printf("Part %zu: Address = %p\n", i, (void *)parts[i]);
+    }
+
+    // Step 5: Access the data
     for (size_t i = 0; i < file_size; i++) {
         putchar(file_data[i]); // Print each character in the file
     }
     printf("\n");
 
-    // Step 5: Unmap the memory
+    // Step 6: Unmap the memory
     if (munmap(file_data, file_size) == -1) {
         perror("Error unmapping file");
         close(fd);
         return EXIT_FAILURE;
     }
 
-    // Step 6: Close the file
+    // Step 7: Close the file
     close(fd);
 
     int available_procs = get_nprocs_conf();
