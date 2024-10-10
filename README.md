@@ -1,2 +1,2 @@
 # parallel-zip-compressor
-Parallel Zip Compression home assigment (sensiAI)
+Parallel Zip Compression home-assigment (sensiAI)
