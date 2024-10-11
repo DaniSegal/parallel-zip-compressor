@@ -39,44 +39,45 @@ void cleanup(int fd, char *file_data, size_t file_size) {
     pthread_cond_destroy(&cond);
 }
 
-void compress_rle(char *input, size_t input_size, char **output, size_t *output_size) {
-    // Allocate maximum possible output size (worst case)
+void compress_rle(char *input, size_t input_size, char **compressed_buffer_output, size_t *compressed_buffer_output_size) {
+    // Allocate maximum possible compressed_buffer_output size (worst case)
     size_t max_output_size = input_size * (sizeof(uint32_t) + sizeof(char)); // Max possible size
-    char *out = malloc(max_output_size);
-    if (!out) {
+    char *out_buffer = malloc(max_output_size);
+    if (!out_buffer) {
         perror("Error allocating memory for compressed data");
         exit(EXIT_FAILURE);
     }
 
-    size_t out_index = 0;
+    size_t out_buffer_index = 0;
     size_t i = 0;
 
     while (i < input_size) {
         char current_char = input[i];
-        uint32_t count = 1;
+        uint32_t char_count = 1;
 
         // Count consecutive characters
-        while ((i + count < input_size) && (input[i + count] == current_char)) {
-            count++;
+        while ((i + char_count < input_size) && (input[i + char_count] == current_char)) {
+            char_count++;
         }
 
-        // Write count (4 bytes) and character (1 byte) to output
-        memcpy(out + out_index, &count, sizeof(uint32_t));
-        out_index += sizeof(uint32_t);
-        out[out_index++] = current_char;
+        // Write char_count (4 bytes) and character (1 byte) to compressed_buffer_output
+        memcpy(out_buffer + out_buffer_index, &char_count, sizeof(uint32_t));
+        out_buffer_index += sizeof(uint32_t);
+        out_buffer[out_buffer_index] = current_char;
+        out_buffer_index++;
 
-        i += count;
+        i += char_count;
     }
 
-    // Reallocate output buffer to actual size
-    out = realloc(out, out_index);
-    if (!out) {
+    // Reallocate compressed_buffer_output buffer to actual size
+    out_buffer = realloc(out_buffer, out_buffer_index);
+    if (!out_buffer) {
         perror("Error reallocating memory for compressed data");
         exit(EXIT_FAILURE);
     }
 
-    *output = out;
-    *output_size = out_index;
+    *compressed_buffer_output = out_buffer;
+    *compressed_buffer_output_size = out_buffer_index;
 }
 
 void *compress_and_write_part(void *arg) {
@@ -100,11 +101,11 @@ void *compress_and_write_part(void *arg) {
         char *part_data = file_data + offset;
 
         // Compress the part
-        char *compressed_data = NULL;
+        char *compressed_part_data = NULL;
         size_t compressed_size = 0;
-        compress_rle(part_data, part_size, &compressed_data, &compressed_size);
+        compress_rle(part_data, part_size, &compressed_part_data, &compressed_size);
 
-        // Synchronize writing to the output file in order
+        // Synchronize writing to the compressed_buffer_output file in order
         pthread_mutex_lock(&write_mutex);
         while (part_index != next_part_to_write) {
             // Wait until it's this part's turn to write
@@ -112,14 +113,15 @@ void *compress_and_write_part(void *arg) {
         }
 
         
-        fwrite(compressed_data, 1, compressed_size, stdout);
-        free(compressed_data);
+        fwrite(compressed_part_data, 1, compressed_size, stdout);
+        free(compressed_part_data);
         next_part_to_write++;
 
         // Signal other threads that they may proceed
         pthread_cond_broadcast(&cond);
-        pthread_mutex_unlock(&write_mutex);
         fprintf(stderr, "Thread processing part %zu\n", part_index);
+        pthread_mutex_unlock(&write_mutex);
+        
 
     }
     return NULL;
