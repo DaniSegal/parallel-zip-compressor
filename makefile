@@ -1,8 +1,8 @@
 # Variables
 CC = gcc
 CFLAGS = -Wall -Werror -pthread -O
-TARGET = pzip
-SRC = pzip.c
+TARGET = testmain
+SRC = testmain.c file_operations.c 
 
 # Default target
 all: $(TARGET)
