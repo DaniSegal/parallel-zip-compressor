@@ -1,16 +1,19 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <fcntl.h>      // For open()
-#include <sys/mman.h>   // For mmap()
-#include <sys/stat.h>   // For fstat()
-#include <unistd.h>     // For close()
-#include <sys/sysinfo.h> // For get_nprocs_conf()
+#include <fcntl.h>      
+#include <sys/mman.h>   
+#include <sys/stat.h>   
+#include <unistd.h>     
+#include <sys/sysinfo.h> 
 #include <pthread.h>
 #include <string.h>
 #include <stdint.h>
+#include "file_operations.h"
+#include "rle_compression.h"
 
 #define PART_SIZE 1024
 
+// Global variables
 size_t current_part = 0;
 size_t next_part_to_write = 0;
 size_t num_parts = 0;
@@ -22,17 +25,6 @@ pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t write_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
 
-void release_resources(int fd, char *file_data, size_t file_size) {
-    if (file_data != NULL && file_data != MAP_FAILED) {
-        if (munmap(file_data, file_size) == -1) {
-            perror("Error unmapping file");
-        }
-    }
-    if (fd != -1) {
-        close(fd);
-    }
-}
-
 void reset_globals() {
     current_part = 0;
     next_part_to_write = 0;
@@ -40,46 +32,6 @@ void reset_globals() {
     last_part_size = 0;
     file_size = 0;
     file_data = NULL;
-}
-
-void compress_rle(char *input, size_t input_size, char **compressed_buffer_output, size_t *compressed_buffer_output_size) {
-    // Allocate maximum possible compressed_buffer_output size (worst case)
-    size_t max_output_size = input_size * (sizeof(uint32_t) + sizeof(char)); // Max possible size
-    char *out_buffer = malloc(max_output_size);
-    if (!out_buffer) {
-        perror("Error allocating memory for compressed data");
-        exit(EXIT_FAILURE);
-    }
-
-    size_t out_buffer_index = 0;
-    size_t i = 0;
-
-    while (i < input_size) {
-        char current_char = input[i];
-        uint32_t char_count = 1;
-
-        // Count consecutive characters
-        while ((i + char_count < input_size) && (input[i + char_count] == current_char)) {
-            char_count++;
-        }
-        // Write char_count (4 bytes) and character (1 byte) to compressed_buffer_output
-        memcpy(out_buffer + out_buffer_index, &char_count, sizeof(uint32_t));
-        out_buffer_index += sizeof(uint32_t);
-        out_buffer[out_buffer_index] = current_char;
-        out_buffer_index++;
-        i += char_count;
-    }
-
-    // Reallocate compressed_buffer_output to its actual size - can be removed to improve CPU efficiency, if we can spare the 'wasted' memory
-    char *temp_buffer = realloc(out_buffer, out_buffer_index);
-    if (!temp_buffer) {
-        perror("Error reallocating memory for compressed data");
-        free(out_buffer); 
-        exit(EXIT_FAILURE);
-    }
-    out_buffer = temp_buffer;
-    *compressed_buffer_output = out_buffer;
-    *compressed_buffer_output_size = out_buffer_index;
 }
 
 void *compress_and_write_part(void *arg) {
@@ -96,8 +48,10 @@ void *compress_and_write_part(void *arg) {
             current_part++;
         pthread_mutex_unlock(&mutex);
 
-        // Calculate part size (handle last part)
+        // Calculate offset to know where is the current part's data
         size_t offset = part_index * PART_SIZE;
+
+        // Calculate part size (handle last part)
         size_t part_size = (part_index == num_parts - 1) ? last_part_size : PART_SIZE;
 
         char *part_data = file_data + offset;
@@ -130,48 +84,30 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Usage: %s <filename1> <filename2> ...\n", argv[0]);
         return EXIT_FAILURE;
     }
+    // Get the number of available processors and initialize a threads array
     int num_threads = get_nprocs();
     fprintf(stderr, "Number of available processors: %d\n", num_threads);
     pthread_t threads[num_threads];
 
+    // Main loop to process all files
     for (int i = 1; i < argc; i++) {
-
         fprintf(stderr, "Processing file: %s\n", argv[i]);
 
-        // Step 1: Open the file
-        int fd = open(argv[i], O_RDONLY);
-        if (fd == -1) {
-            fprintf(stderr, "Error opening file: %s\n", argv[i]);
-            perror(NULL);
-            return EXIT_FAILURE;
-        }
-
-        // Step 2: Get the file size
-        struct stat file_stat;    
-        if (fstat(fd, &file_stat) == -1) {
-            perror("Error getting file size");
-            release_resources(fd, file_data, file_size);
-            return EXIT_FAILURE;
-        }
-        file_size = file_stat.st_size;
-    
-        // Step 3: Map the file into memory
-        file_data = mmap(NULL, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+        // Open the file, map the file into memory and get file size returned into dedicated variable
+        int fd = -1;
+        file_data = open_and_map_file(argv[i], &fd, &file_size);
         if (file_data == MAP_FAILED) {
-            perror("Error mapping file");
-            release_resources(fd, file_data, file_size);
             return EXIT_FAILURE;
         }
 
-        // Step 4: Calculate the number of parts
+        // Calculate the number of parts and the size of the last part
         num_parts = (file_size + PART_SIZE - 1) / PART_SIZE;
         last_part_size = file_size % PART_SIZE;
         if (last_part_size == 0 && file_size > 0) {
             last_part_size = PART_SIZE;
         }
 
-
-        // Step 5: Create thread pool
+        // Create thread pool
         for (long i = 0; i < num_threads; i++) {
             if (pthread_create(&threads[i], NULL, compress_and_write_part, NULL) != 0) {
                 perror("Error creating thread");
@@ -180,7 +116,7 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        // step 6: join the threads
+        // Join the threads
         for (long i = 0; i < num_threads; i++) {
             if (pthread_join(threads[i], NULL) != 0) {
                 perror("Error joining thread");
@@ -189,13 +125,12 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        // Step 7: Cleanup
+        // Cleanup
         release_resources(fd, file_data, file_size);
         reset_globals();
-
-        
     }
 
+    // Destroy mutex and condition variable
     pthread_mutex_destroy(&mutex);
     pthread_mutex_destroy(&write_mutex);
     pthread_cond_destroy(&cond);
