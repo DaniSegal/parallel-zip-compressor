@@ -37,51 +37,62 @@ void reset_globals() {
     file_data = NULL;
 }
 
+size_t get_next_part() {
+    size_t part_index;
+    pthread_mutex_lock(&current_part_mutex);
+        if (current_part >= num_parts) {
+            pthread_mutex_unlock(&current_part_mutex);
+            return -1;
+        }
+        part_index = current_part;
+        current_part++;
+    pthread_mutex_unlock(&current_part_mutex);
+    return part_index;
+}
+
+void write_compressed_part(char *compressed_data, size_t compressed_data_size, size_t part_index) {
+
+    // Synchronize writing to the compressed_buffer_output file in order
+    pthread_mutex_lock(&write_mutex);
+    while (part_index != next_part_to_write) {
+        pthread_cond_wait(&write_cond, &write_mutex);
+    }
+    // Write the compressed data to stdout
+    fwrite(compressed_data, 1, compressed_data_size, stdout);
+    free(compressed_data);
+
+    // Increment the next part to write to maintain order
+    next_part_to_write++;
+
+    // Signal other threads that they may proceed
+    pthread_cond_broadcast(&write_cond);
+    pthread_mutex_unlock(&write_mutex);
+}
+
 void *compress_and_write_part(void *arg) {
     while (1) {
         pthread_barrier_wait(&barrier);
         if (done) break;
-
         while (1) {
-            size_t part_index;
-
-            // Get the next part to process safely
-            pthread_mutex_lock(&current_part_mutex);
-                if (current_part >= num_parts) {
-                    pthread_mutex_unlock(&current_part_mutex);
-                    break;
-                }
-                part_index = current_part;
-                current_part++;
-            pthread_mutex_unlock(&current_part_mutex);
-
+            size_t part_index = get_next_part();
+            if (part_index == -1) {
+                break;
+            }
             // Calculate offset to know where is the current part's data
             size_t offset = part_index * PART_SIZE;
+            char *part_data = file_data + offset;
 
             // Calculate part size (handle last part)
             size_t part_size = (part_index == num_parts - 1) ? last_part_size : PART_SIZE;
 
-            char *part_data = file_data + offset;
-
-            // Compress the part
+            // Initialize variables to store compressed part data and size
             char *compressed_part_data = NULL;
-            size_t compressed_size = 0;
-            compress_rle(part_data, part_size, &compressed_part_data, &compressed_size);
+            size_t compressed_part_size = 0;
+            // Compress the part using RLE algorithm
+            compress_rle(part_data, part_size, &compressed_part_data, &compressed_part_size); 
 
-            // Synchronize writing to the compressed_buffer_output file in order
-            pthread_mutex_lock(&write_mutex);
-            while (part_index != next_part_to_write) {
-                // Wait until it's this part's turn to write
-                pthread_cond_wait(&write_cond, &write_mutex);
-            }
-            fprintf(stderr, "Writing part index: %zu\n", part_index);
-            fwrite(compressed_part_data, 1, compressed_size, stdout);
-            free(compressed_part_data);
-            next_part_to_write++;
-
-            // Signal other threads that they may proceed
-            pthread_cond_broadcast(&write_cond);
-            pthread_mutex_unlock(&write_mutex);
+            // Write the compressed part to stdout
+            write_compressed_part(compressed_part_data, compressed_part_size, part_index);
         }
         pthread_barrier_wait(&barrier);
     }
@@ -149,7 +160,7 @@ int main(int argc, char *argv[]) {
         }
     }
     
-    // Destroy mutex and condition variable
+    // Destroy mutex, condition and barrier variables
     pthread_mutex_destroy(&current_part_mutex);
     pthread_mutex_destroy(&write_mutex);
     pthread_cond_destroy(&write_cond);

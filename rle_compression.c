@@ -41,7 +41,6 @@ void compress_rle(char *input, size_t input_size, char **compressed_buffer_outpu
     while (i < input_size) {
         char current_char = input[i];
         uint32_t char_count = count_consecutive_chars(input, input_size, i);
-
         write_rle_encoding(out_buffer, &out_buffer_index, current_char, char_count);
         i += char_count;
     }
