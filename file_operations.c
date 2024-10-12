@@ -8,7 +8,7 @@
 #include <sys/stat.h>   // For fstat()
 #include <unistd.h>     // For close()
 
-int open_file(const char *filename) {
+static int open_file(const char *filename) {
     int fd = open(filename, O_RDONLY);
     if (fd == -1) {
         perror("Error opening file");
@@ -16,7 +16,7 @@ int open_file(const char *filename) {
     return fd;
 }
 
-int get_file_size(int fd, size_t *file_size) {
+static int get_file_size(int fd, size_t *file_size) {
     struct stat file_stat;
     if (fstat(fd, &file_stat) == -1) {
         perror("Error getting file size");
@@ -26,7 +26,7 @@ int get_file_size(int fd, size_t *file_size) {
     return 0;
 }
 
-char *map_file(int fd, size_t file_size) {
+static char *map_file(int fd, size_t file_size) {
     char *data = mmap(NULL, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
     if (data == MAP_FAILED) {
         perror("Error mapping file");
@@ -34,7 +34,7 @@ char *map_file(int fd, size_t file_size) {
     return data;
 }
 
-void unmap_file(char *file_data, size_t file_size) {
+static void unmap_file(char *file_data, size_t file_size) {
     if (file_data != NULL && file_data != MAP_FAILED) {
         if (munmap(file_data, file_size) == -1) {
             perror("Error unmapping file");
@@ -42,7 +42,7 @@ void unmap_file(char *file_data, size_t file_size) {
     }
 }
 
-void close_file(int fd) {
+static void close_file(int fd) {
     if (fd != -1) {
         close(fd);
     }
