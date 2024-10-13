@@ -28,6 +28,13 @@ pthread_mutex_t write_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t write_cond = PTHREAD_COND_INITIALIZER;
 pthread_barrier_t barrier;
 
+/**
+ * @brief Resets global variables used for tracking file processing.
+ *
+ * This function sets all global variables that are used to track the progress of
+ * file processing back to their initial states. It should be called before starting
+ * processing of a new file.
+ */
 void reset_globals() {
     current_part = 0;
     next_part_to_write = 0;
@@ -37,6 +44,15 @@ void reset_globals() {
     file_data = NULL;
 }
 
+/**
+ * @brief Gets the index of the next part of the file to be processed.
+ *
+ * This function is thread-safe and utilizes a mutex to manage access to the
+ * shared `current_part` variable. It increments the `current_part` counter to
+ * ensure that each thread processes a unique part of the file.
+ *
+ * @return The index of the next part to be processed, or -1 if all parts have been processed.
+ */
 size_t get_next_part() {
     size_t part_index;
     pthread_mutex_lock(&current_part_mutex);
@@ -50,6 +66,17 @@ size_t get_next_part() {
     return part_index;
 }
 
+/**
+ * @brief Writes compressed data for a specified part to stdout in order.
+ *
+ * This function ensures that compressed parts are written to stdout in the correct order.
+ * It uses a mutex and condition variable to manage safe and ordered access, ensuring that only
+ * the thread responsible for the current part writes to stdout.
+ *
+ * @param compressed_data A pointer to the compressed data buffer to be written.
+ * @param compressed_data_size The size of the compressed data buffer.
+ * @param part_index The index of the file part being written.
+ */
 void write_compressed_part(char *compressed_data, size_t compressed_data_size, size_t part_index) {
 
     // Synchronize writing to the compressed_buffer_output file in order
@@ -69,15 +96,34 @@ void write_compressed_part(char *compressed_data, size_t compressed_data_size, s
     pthread_mutex_unlock(&write_mutex);
 }
 
+/**
+ * @brief The main core loop function for threads that compress and write file parts.
+ *
+ * Each thread executes this function, which processes file parts using an outer and an inner
+ * while loop.
+ *
+ * - **Outer Loop**: Runs as long as the `done` flag is not set, allowing the thread to
+ *   process multiple files. Each iteration begins by synchronizing at a barrier, ensuring
+ *   all threads are ready for the next file prepared by the main thread.
+ *
+ * - **Inner Loop**: Within each file, this loop retrieves the next part, compresses it
+ *   with RLE, and writes the output to stdout in order. It continues until all parts
+ *   of the file are processed.
+ *
+ * After a file is completed, the thread waits at the barrier again, synchronizing with the
+ * main thread before moving to the next file. This ensures all threads finish each file
+ * before starting a new one.
+ *
+ * @param arg Unused parameter, passed to conform to pthread function signature.
+ * @return Always returns NULL.
+ */
 void *compress_and_write_part(void *arg) {
     while (1) {
         pthread_barrier_wait(&barrier);
         if (done) break;
         while (1) {
             size_t part_index = get_next_part();
-            if (part_index == -1) {
-                break;
-            }
+            if (part_index == -1) break;
             // Calculate offset to know where is the current part's data
             size_t offset = part_index * PART_SIZE;
             char *part_data = file_data + offset;
@@ -105,7 +151,7 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
     // Get the number of available processors and initialize a threads array
-    int num_threads = get_nprocs();
+    int num_threads = get_nprocs() - 1;
     fprintf(stderr, "Number of available processors: %d\n", num_threads);
     pthread_t threads[num_threads];
 
