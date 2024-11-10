@@ -1,12 +1,18 @@
 
 # Parallel File Compressor with RLE
 
-This project is a multithreaded file compression tool implementing Run-Length Encoding (RLE) for data compression. Written in C, it demonstrates an approach to efficiently distributing tasks (in this case, RLE compression) across multiple worker threads to fully utilize all available CPU cores and boost performance. Using the pthread library, this tool achieves parallel processing while optimizing memory management through memory-mapped files (mmap). Designed to handle multiple files sequentially, it balances parallel and serialized operations to minimize memory usage and maintain correct output order through careful thread synchronization.
+Welcome to Parallel Zip Compressor!
+
+This project is my first dive into the world of multithreading, which I have explored as a self-learner to understand how to make systems both high-performance and lightweight.
+
+This project is a multithreaded file compression tool, specifically tailored to run efficiently on memory-limited embedded systems. 
+Written in C, it demonstrates an approach to distributing tasks (in this case, RLE compression) across multiple worker threads to fully utilize all available CPU cores and boost performance while conserving memory. 
+
 
 ## Features
 
 - **Memory Mapping**: Uses `mmap` to map each file into memory for efficient access and manipulation.
-- **Parallelism**: Dynamically determines the optimal number of threads (`get_nprocs()`) to divide files into manageable parts, each processed concurrently.
+- **Parallelism**: Dynamically determines the optimal number of threads (`get_nprocs()`). 
 - **Serialized File Handling**: Files are processed one by one to save memory, with threads waiting at a barrier while each file is unmapped and the next file is loaded.
 - **RLE Compression**: Implements a standard RLE algorithm for compressing data in O(n) time complexity.
 - **Output Order Maintenance**: Threads write compressed data to `stdout` in the same order it was read, thanks to mutex-protected writes and condition variables.
